@@ -1,0 +1,68 @@
+# Override do kube-prometheus-stack pra um cluster de staging. Só o que
+# muda em relação ao default fica aqui.
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    retentionSize: 8GB
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        memory: 2Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+
+    # Por padrão o operator só pega Rule/Monitor com o label da release.
+    # Soltando isso ele coleta os que estão em monitoring/alerts sem
+    # precisar casar label de release na mão.
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+
+grafana:
+  # Senha vem de secret existente, não fica em values versionado.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+
+  defaultDashboardsTimezone: America/Sao_Paulo
+
+  persistence:
+    enabled: true
+    size: 5Gi
+
+  # O sidecar varre ConfigMaps com o label grafana_dashboard e importa
+  # sozinho. É assim que o dashboard de pods entra (ver README).
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+
+# No EKS o control plane é gerenciado e não dá pra fazer scrape desses
+# componentes. Deixar habilitado só gera target down e alerta falso.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
