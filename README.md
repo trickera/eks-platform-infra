@@ -53,7 +53,9 @@ módulos com versão presa, e o `.terraform.lock.hcl` vai versionado.
 
 Os checks (`fmt`, `validate`, `tflint`, `trivy`) rodam num job separado, sem
 credencial de nuvem, antes do `plan`, o PR quebra rápido sem gastar AssumeRole à
-toa. O `trivy` faz scan de misconfig no terraform e barra em CRITICAL.
+toa. O `trivy` faz scan de misconfig no terraform e barra em CRITICAL. O `plan`
+(no PR) e o `apply` (na main) só rodam com a variável de repositório
+`AWS_DEPLOY=true` e o secret `AWS_ROLE_ARN` setados; sem isso roda só os checks.
 
 ## Como rodar
 

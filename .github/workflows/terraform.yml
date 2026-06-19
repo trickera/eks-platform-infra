@@ -30,13 +30,13 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
-  # Gate de qualidade: roda sem credencial de nuvem e falha rápido antes do
-  # plan gastar AssumeRole. tflint e trivy rodam antes de qualquer init pra não
-  # varrer o código baixado dos módulos da comunidade em .terraform.
+  # Checks de qualidade, sem credencial de nuvem: fmt, tflint, trivy, validate.
+  # O deploy (plan/apply) fica nos jobs abaixo, atrás da var AWS_DEPLOY, pra o
+  # CI não tentar tocar a AWS antes da conta estar configurada.
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -46,7 +46,7 @@ jobs:
       - name: fmt
         run: terraform fmt -check -recursive
 
-      - uses: terraform-linters/setup-tflint@v4
+      - uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: v0.52.0
 
@@ -58,7 +58,7 @@ jobs:
           tflint --recursive -f compact
 
       - name: trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.36.0
         env:
           # escaneia só o nosso terraform, não as entranhas dos módulos da comunidade
           TRIVY_TF_EXCLUDE_DOWNLOADED_MODULES: "true"
@@ -81,21 +81,21 @@ jobs:
           terraform -chdir=bootstrap validate
 
   plan:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && vars.AWS_DEPLOY == 'true'
     needs: checks
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: terraform
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -110,7 +110,7 @@ jobs:
         continue-on-error: true
 
       - name: comentar plan no PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require("fs");
@@ -162,21 +162,21 @@ jobs:
         run: exit 1
 
   apply:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_DEPLOY == 'true'
     needs: checks
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: terraform
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

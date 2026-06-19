@@ -3,14 +3,14 @@ updates:
   - package-ecosystem: terraform
     directory: /terraform
     schedule:
-      interval: weekly
+      interval: monthly
 
   - package-ecosystem: terraform
     directory: /bootstrap
     schedule:
-      interval: weekly
+      interval: monthly
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
