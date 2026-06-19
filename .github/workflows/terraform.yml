@@ -1,0 +1,188 @@
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - "bootstrap/**"
+      - ".tflint.hcl"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "bootstrap/**"
+      - ".tflint.hcl"
+      - ".github/workflows/terraform.yml"
+
+permissions:
+  id-token: write       # troca o token OIDC por credencial temporária na AWS
+  contents: read
+  pull-requests: write  # comentar o plan no PR
+
+# Não cancela apply em andamento; dois applies no mesmo state corrompem o lock.
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.7.5"
+  AWS_REGION: us-east-1
+
+jobs:
+  # Gate de qualidade: roda sem credencial de nuvem e falha rápido antes do
+  # plan gastar AssumeRole. tflint e trivy rodam antes de qualquer init pra não
+  # varrer o código baixado dos módulos da comunidade em .terraform.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: fmt
+        run: terraform fmt -check -recursive
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.52.0
+
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}  # evita rate limit ao baixar o ruleset
+        run: |
+          tflint --init
+          tflint --recursive -f compact
+
+      - name: trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        env:
+          # escaneia só o nosso terraform, não as entranhas dos módulos da comunidade
+          TRIVY_TF_EXCLUDE_DOWNLOADED_MODULES: "true"
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL
+          exit-code: "1"
+          hide-progress: true
+
+      # -backend=false: validar não precisa do S3 nem de credencial.
+      - name: validate (infra)
+        run: |
+          terraform -chdir=terraform init -backend=false -input=false
+          terraform -chdir=terraform validate
+
+      - name: validate (bootstrap)
+        run: |
+          terraform -chdir=bootstrap init -backend=false -input=false
+          terraform -chdir=bootstrap validate
+
+  plan:
+    if: github.event_name == 'pull_request'
+    needs: checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: init
+        run: terraform init -input=false
+
+      - name: plan
+        id: plan
+        run: terraform plan -no-color -input=false -out=tfplan | tee plan.txt
+        # Segura o erro pra conseguir comentar o plan no PR antes de falhar.
+        continue-on-error: true
+
+      - name: comentar plan no PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- terraform-plan -->";
+            const raw = fs.readFileSync("terraform/plan.txt", "utf8");
+            const max = 60000;
+            const plan = raw.length > max
+              ? raw.slice(0, max) + "\n... (truncado, ver log completo na action)"
+              : raw;
+
+            const body = [
+              marker,
+              `#### terraform plan: \`${{ steps.plan.outcome }}\``,
+              "",
+              "<details><summary>Ver plan</summary>",
+              "",
+              "```",
+              plan,
+              "```",
+              "",
+              "</details>",
+            ].join("\n");
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const previous = comments.find(c => c.body && c.body.includes(marker));
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: resultado do plan
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  apply:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: init
+        run: terraform init -input=false
+
+      - name: apply
+        run: terraform apply -auto-approve -input=false
