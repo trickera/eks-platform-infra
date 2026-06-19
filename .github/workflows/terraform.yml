@@ -58,7 +58,7 @@ jobs:
           tflint --recursive -f compact
 
       - name: trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         env:
           # escaneia só o nosso terraform, não as entranhas dos módulos da comunidade
           TRIVY_TF_EXCLUDE_DOWNLOADED_MODULES: "true"
